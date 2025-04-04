@@ -15,9 +15,58 @@ const CSV_OUTPUT = path.join(OUTPUT_DIR, 'vietnam-heritage-sites.csv');
 // Tạo thư mục output nếu chưa tồn tại
 fs.ensureDirSync(OUTPUT_DIR);
 
+// Hàm làm sạch văn bản
 function cleanString(str) {
-    return str.replace(/\n/g, " ")  // Thay \n bằng khoảng trắng
-        .replace(/\[\d+\]/g, ""); // Xóa [số] 
+    if (!str) return '';
+
+    // Loại bỏ xuống dòng và làm sạch
+    let cleaned = str.replace(/\n/g, " ")  // Thay \n bằng khoảng trắng
+        .replace(/\[\d+\]/g, "")    // Xóa [số]
+        .replace(/\s+/g, " ")       // Thay nhiều khoảng trắng liên tiếp bằng một khoảng trắng
+        .trim();                    // Xóa khoảng trắng đầu/cuối
+
+    // Xóa khoảng trắng sau dấu chấm, dấu phẩy, dấu chấm phẩy, dấu hai chấm
+    cleaned = cleaned.replace(/\.\s+/g, ".");
+    cleaned = cleaned.replace(/,\s+/g, ",");
+    cleaned = cleaned.replace(/;\s+/g, ";");
+    cleaned = cleaned.replace(/:\s+/g, ":");
+
+    return cleaned;
+}
+
+// Hàm xử lý tọa độ
+function extractCoordinates(text) {
+    if (!text) return null;
+
+    // Thử các định dạng tọa độ khác nhau
+    // Định dạng 1: 21,0307°B 105,852°Đ
+    const regex1 = /(\d+[.,]\d+)°([BN])[\s,]+(\d+[.,]\d+)°([ĐE])/;
+
+    // Định dạng 2: 10°46′37″B 106°41′43″Đ
+    const regex2 = /(\d+)°(\d+)′(\d+)″([BN])\s+(\d+)°(\d+)′(\d+)″([ĐE])/;
+
+    // Kiểm tra định dạng 1
+    const match1 = text.match(regex1);
+    if (match1) {
+        const lat = match1[1].replace(',', '.');
+        const lng = match1[3].replace(',', '.');
+
+        return {
+            latitude: `${lat}°${match1[2]}`,
+            longitude: `${lng}°${match1[4]}`
+        };
+    }
+
+    // Kiểm tra định dạng 2
+    const match2 = text.match(regex2);
+    if (match2) {
+        return {
+            latitude: `${match2[1]}°${match2[2]}′${match2[3]}″${match2[4]}`,
+            longitude: `${match2[5]}°${match2[6]}′${match2[7]}″${match2[8]}`
+        };
+    }
+
+    return null;
 }
 
 async function crawlHeritages() {
@@ -61,18 +110,6 @@ async function crawlHeritages() {
                 console.log(`\nĐang xử lý bảng không có tiêu đề`);
             }
 
-            // Xác định loại di tích từ tiêu đề
-            // let heritageType = 'Chưa phân loại';
-            // if (tableCaption.toLowerCase().includes('lịch sử')) {
-            //     heritageType = 'Di tích lịch sử';
-            // } else if (tableCaption.toLowerCase().includes('kiến trúc')) {
-            //     heritageType = 'Di tích kiến trúc nghệ thuật';
-            // } else if (tableCaption.toLowerCase().includes('khảo cổ')) {
-            //     heritageType = 'Di tích khảo cổ';
-            // } else if (tableCaption.toLowerCase().includes('danh lam')) {
-            //     heritageType = 'Danh lam thắng cảnh';
-            // }
-
             // Lấy các hàng dữ liệu (bỏ qua hàng tiêu đề)
             const rows = await table.findElements(By.css('tr'));
 
@@ -89,9 +126,33 @@ async function crawlHeritages() {
                     const typesCell = cells[3];
 
                     const name = cleanString(await nameCell.getText());
-                    //const image = await imageCell.getText();
-                    const location = await locationCell.getText();
-                    const types = await typesCell.getText();
+                    const locationText = await locationCell.getText();
+
+                    // Tách riêng địa điểm và tọa độ
+                    const coordinates = extractCoordinates(locationText);
+                    let location = locationText;
+
+                    // Nếu có tọa độ, loại bỏ phần tọa độ khỏi location
+                    if (coordinates) {
+                        // Tìm vị trí của tọa độ trong chuỗi location
+                        const regex1 = /\d+[.,]\d+°[BN][\s,]+\d+[.,]\d+°[ĐE]/;
+                        const regex2 = /\d+°\d+′\d+″[BN]\s+\d+°\d+′\d+″[ĐE]/;
+
+                        const match1 = location.match(regex1);
+                        const match2 = location.match(regex2);
+
+                        if (match1) {
+                            location = location.replace(match1[0], '').trim();
+                        } else if (match2) {
+                            location = location.replace(match2[0], '').trim();
+                        }
+                    }
+
+                    // Làm sạch location
+                    location = cleanString(location);
+                    const types = cleanString(await typesCell.getText());
+
+                    // Lấy hình ảnh
                     let imageUrl = '';
                     try {
                         const img = await imageCell.findElement(By.css('img')); // Tìm thẻ <img> trong imageCell
@@ -104,6 +165,7 @@ async function crawlHeritages() {
                     } catch (error) {
                         console.log('Không tìm thấy ảnh');
                     }
+
                     // Lấy link chi tiết
                     let detailLink = '';
                     try {
@@ -111,16 +173,20 @@ async function crawlHeritages() {
                     } catch (error) {
                         // Không có link
                     }
+
                     // Thêm vào mảng di tích
                     if (name) {
                         heritages.push({
                             name,
                             location,
+                            coordinates,
                             types,
                             detailLink,
                             imageUrl,
                             description: '',
-                            events: []
+                            events: [],
+                            architectural: '',
+                            culturalFestival: ''
                         });
 
                         console.log(`  - Đã thêm: ${name}`);
@@ -146,94 +212,223 @@ async function crawlHeritages() {
                     // Lấy đoạn mô tả đầu tiên
                     try {
                         const firstParagraph = await driver.findElement(By.css('#mw-content-text p'));
-                        heritage.description = await firstParagraph.getText();
+                        heritage.description = cleanString(await firstParagraph.getText());
                         console.log('  - Đã lấy mô tả');
                     } catch (error) {
                         console.log('  - Không tìm thấy mô tả');
                     }
 
-                    // Tìm tiêu đề lịch sử
+                    // Lấy tất cả thẻ h2 trong trang
+                    const allH2 = await driver.executeScript(`
+                        return Array.from(document.querySelectorAll('h2')).map(h2 => ({
+                            text: h2.textContent.trim(),
+                            element: h2
+                        }));
+                    `);
+
+                    // PHẦN 1: Tìm h2 chứa từ khóa "lịch sử" hoặc tương tự
                     try {
-                        // Tìm tất cả các tiêu đề h2 có chứa từ "lịch sử" hoặc tương tự
                         const historyH2 = await driver.executeScript(`
-                            const h2Elements = Array.from(document.querySelectorAll('h2'));
-                            return h2Elements.find(el => 
-                                el.textContent.toLowerCase().includes('lịch sử')
+                            const h2s = arguments[0];
+                            return h2s.find(item => 
+                                item.text.toLowerCase().includes('lịch sử') ||
+                                item.text.toLowerCase().includes('phát triển') ||
+                                item.text.toLowerCase().includes('hình thành')
                             );
-                        `);
+                        `, allH2);
 
                         if (historyH2) {
                             console.log('  - Đã tìm thấy phần lịch sử');
 
-                            // Tìm tất cả các h3 và p sau h2 này cho đến h2 tiếp theo
+                            // Xử lý phần lịch sử
                             const historyContent = await driver.executeScript(`
-                                const h2 = arguments[0];
-                                const div = h2.closest('div.mw-heading');
-                                if (!div) return null;
-                                
+                                const h2 = arguments[0].element;
+                                const heritageName = arguments[1];
                                 const events = [];
-                                let currentEvent = null;
-                                let currentDescription = '';
                                 
-                                // Lấy tất cả các elements sau div chứa h2 này
-                                let currentElement = div.nextElementSibling;
+                                // Tìm thẻ div chứa h2
+                                const h2Div = h2.closest('div.mw-heading');
+                                if (!h2Div) return events;
                                 
+                                // Tìm tất cả h3 sau h2 này
+                                let currentElement = h2Div.nextElementSibling;
+                                const h3Elements = [];
+                                
+                                // Chuẩn bị tìm h3 elements và các nội dung sau mỗi h3
                                 while (currentElement && 
                                       !currentElement.querySelector('h2') && 
                                       !currentElement.classList.contains('mw-heading-2')) {
                                     
-                                    // Nếu là h3 thì bắt đầu một event mới
                                     if (currentElement.classList.contains('mw-heading') && 
                                         currentElement.querySelector('h3')) {
-                                        
-                                        // Lưu event cũ nếu có
-                                        if (currentEvent) {
-                                            currentEvent.description = currentDescription.trim();
-                                            events.push(currentEvent);
-                                            currentDescription = '';
-                                        }
-                                        
-                                        // Tạo event mới
-                                        const h3 = currentElement.querySelector('h3');
-                                        currentEvent = {
-                                            title: h3.textContent.trim(),
-                                            description: ''
-                                        };
-                                    }
-                                    // Nếu là p và đã có event thì thêm vào description
-                                    else if (currentElement.tagName === 'P' && currentEvent) {
-                                        currentDescription += currentElement.textContent + '\\n';
-                                    }
-                                    // Nếu là p nhưng chưa có event (trước h3 đầu tiên)
-                                    else if (currentElement.tagName === 'P' && !currentEvent) {
-                                        // Có thể đây là đoạn mở đầu, thêm vào mô tả chung
+                                        h3Elements.push({
+                                            element: currentElement,
+                                            title: currentElement.querySelector('h3').textContent.trim()
+                                        });
                                     }
                                     
                                     currentElement = currentElement.nextElementSibling;
                                 }
                                 
-                                // Lưu event cuối cùng nếu có
-                                if (currentEvent) {
-                                    currentEvent.description = currentDescription.trim();
-                                    events.push(currentEvent);
+                                // Nếu có các h3, xử lý từng h3
+                                if (h3Elements.length > 0) {
+                                    for (let i = 0; i < h3Elements.length; i++) {
+                                        const h3Data = h3Elements[i];
+                                        const nextH3 = h3Elements[i + 1]?.element;
+                                        let description = '';
+                                        
+                                        // Lấy tất cả các thẻ p giữa h3 hiện tại và h3 tiếp theo
+                                        let element = h3Data.element.nextElementSibling;
+                                        
+                                        while (element && element !== nextH3 && 
+                                              !element.querySelector('h2') && 
+                                              !element.classList.contains('mw-heading-2')) {
+                                            
+                                            if (element.tagName === 'P') {
+                                                description += element.textContent.trim() + ' ';
+                                            }
+                                            
+                                            element = element.nextElementSibling;
+                                        }
+                                        
+                                        events.push({
+                                            title: h3Data.title,
+                                            description: description.trim()
+                                        });
+                                    }
+                                } 
+                                // Không có h3, lấy tất cả p sau h2
+                                else {
+                                    let description = '';
+                                    let element = h2Div.nextElementSibling;
+                                    
+                                    while (element && 
+                                          !element.querySelector('h2') && 
+                                          !element.classList.contains('mw-heading-2')) {
+                                        
+                                        if (element.tagName === 'P') {
+                                            description += element.textContent.trim() + ' ';
+                                        }
+                                        
+                                        element = element.nextElementSibling;
+                                    }
+                                    
+                                    if (description.trim()) {
+                                        events.push({
+                                            title: "Lịch sử " + heritageName,
+                                            description: description.trim()
+                                        });
+                                    }
                                 }
                                 
                                 return events;
-                            `, historyH2);
+                            `, historyH2, heritage.name);
 
                             if (historyContent && historyContent.length > 0) {
-                                heritage.events = historyContent;
+                                heritage.events = historyContent.map(event => ({
+                                    title: event.title,
+                                    description: cleanString(event.description)
+                                }));
                                 console.log(`  - Đã lấy ${historyContent.length} sự kiện lịch sử`);
                             } else {
-                                console.log('  - Không tìm thấy cấu trúc sự kiện lịch sử theo dạng h3->p');
+                                console.log('  - Không tìm thấy sự kiện lịch sử');
                             }
                         } else {
                             console.log('  - Không tìm thấy phần lịch sử');
                         }
+
+                        // PHẦN 2: Tìm h2 chứa từ khóa "kiến trúc"
+                        const architectureH2 = await driver.executeScript(`
+                            const h2s = arguments[0];
+                            return h2s.find(item => 
+                                item.text.toLowerCase().includes('kiến trúc') ||
+                                item.text.toLowerCase().includes('công trình') ||
+                                item.text.toLowerCase().includes('di tích')
+                            );
+                        `, allH2);
+
+                        if (architectureH2) {
+                            console.log('  - Đã tìm thấy phần kiến trúc');
+
+                            // Lấy tất cả văn bản trong phần kiến trúc
+                            const architectureContent = await driver.executeScript(`
+                                const h2 = arguments[0].element;
+                                const h2Div = h2.closest('div.mw-heading');
+                                if (!h2Div) return '';
+                                
+                                let content = '';
+                                let element = h2Div.nextElementSibling;
+                                
+                                while (element && 
+                                      !element.querySelector('h2') && 
+                                      !element.classList.contains('mw-heading-2')) {
+                                    
+                                    if (element.tagName === 'P') {
+                                        content += element.textContent.trim() + ' ';
+                                    }
+                                    
+                                    element = element.nextElementSibling;
+                                }
+                                
+                                return content.trim();
+                            `, architectureH2);
+
+                            if (architectureContent) {
+                                heritage.architectural = cleanString(architectureContent);
+                                console.log('  - Đã lấy thông tin kiến trúc');
+                            }
+                        } else {
+                            console.log('  - Không tìm thấy phần kiến trúc');
+                        }
+
+                        // PHẦN 3: Tìm h2 chứa từ khóa "lễ hội"
+                        const festivalH2 = await driver.executeScript(`
+                            const h2s = arguments[0];
+                            return h2s.find(item => 
+                                item.text.toLowerCase().includes('lễ hội') ||
+                                item.text.toLowerCase().includes('nghi lễ') ||
+                                item.text.toLowerCase().includes('phong tục') ||
+                                item.text.toLowerCase().includes('tín ngưỡng')
+                            );
+                        `, allH2);
+
+                        if (festivalH2) {
+                            console.log('  - Đã tìm thấy phần lễ hội/nghi lễ');
+
+                            // Lấy tất cả văn bản trong phần lễ hội
+                            const festivalContent = await driver.executeScript(`
+                                const h2 = arguments[0].element;
+                                const h2Div = h2.closest('div.mw-heading');
+                                if (!h2Div) return '';
+                                
+                                let content = '';
+                                let element = h2Div.nextElementSibling;
+                                
+                                while (element && 
+                                      !element.querySelector('h2') && 
+                                      !element.classList.contains('mw-heading-2')) {
+                                    
+                                    if (element.tagName === 'P') {
+                                        content += element.textContent.trim() + ' ';
+                                    }
+                                    
+                                    element = element.nextElementSibling;
+                                }
+                                
+                                return content.trim();
+                            `, festivalH2);
+
+                            if (festivalContent) {
+                                heritage.culturalFestival = cleanString(festivalContent);
+                                console.log('  - Đã lấy thông tin lễ hội/nghi lễ');
+                            }
+                        } else {
+                            console.log('  - Không tìm thấy phần lễ hội/nghi lễ');
+                        }
+
                     } catch (error) {
                         console.log('  - Lỗi khi lấy phần lịch sử:', error.message);
                     }
-
 
                     // Tạm dừng để tránh quá tải server
                     await driver.sleep(1000);
