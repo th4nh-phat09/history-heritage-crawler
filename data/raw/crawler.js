@@ -11,6 +11,8 @@ const WIKI_URL = 'https://vi.wikipedia.org/wiki/Di_t%C3%ADch_qu%E1%BB%91c_gia_%C
 const OUTPUT_DIR = path.join(__dirname, 'data', 'raw');
 const JSON_OUTPUT = path.join(OUTPUT_DIR, 'vietnam-heritage-sites.json');
 const CSV_OUTPUT = path.join(OUTPUT_DIR, 'vietnam-heritage-sites.csv');
+const FILTERED_JSON_OUTPUT = path.join(OUTPUT_DIR, 'vietnam-heritage-sites-filtered.json');
+const FILTERED_CSV_OUTPUT = path.join(OUTPUT_DIR, 'vietnam-heritage-sites-filtered.csv');
 
 // Tạo thư mục output nếu chưa tồn tại
 fs.ensureDirSync(OUTPUT_DIR);
@@ -439,11 +441,28 @@ async function crawlHeritages() {
             }
         }
 
-        // Lưu dữ liệu vào file JSON
-        await fs.writeJson(JSON_OUTPUT, heritages, { spaces: 2 });
-        console.log(`\nĐã lưu dữ liệu vào file JSON: ${JSON_OUTPUT}`);
+        // Lọc mảng heritages để loại bỏ các phần tử không có tọa độ và không phải di tích lịch sử
+        const filteredHeritages = heritages.filter(heritage => {
+            // Kiểm tra xem có tọa độ không
+            const hasCoordinates = heritage.coordinates !== null;
 
-        // Lưu dữ liệu vào file CSV
+            // Kiểm tra xem có phải di tích lịch sử không
+            const isHistoricalSite = heritage.types.includes('Di tích lịch sử');
+
+            // Chỉ giữ lại những di tích có cả tọa độ và là di tích lịch sử
+            return hasCoordinates && isHistoricalSite;
+        });
+
+        console.log(`Đã lọc còn ${filteredHeritages.length}/${heritages.length} di tích có tọa độ và thuộc di tích lịch sử.`);
+
+        // Lưu dữ liệu gốc và dữ liệu đã lọc
+        await fs.writeJson(JSON_OUTPUT, heritages, { spaces: 2 });
+        console.log(`\nĐã lưu dữ liệu gốc vào file JSON: ${JSON_OUTPUT}`);
+
+        await fs.writeJson(FILTERED_JSON_OUTPUT, filteredHeritages, { spaces: 2 });
+        console.log(`Đã lưu dữ liệu đã lọc vào file JSON: ${FILTERED_JSON_OUTPUT}`);
+
+        // Lưu dữ liệu gốc vào CSV
         const csvWriter = createObjectCsvWriter({
             path: CSV_OUTPUT,
             header: [
@@ -457,9 +476,25 @@ async function crawlHeritages() {
         });
 
         await csvWriter.writeRecords(heritages);
-        console.log(`Đã lưu dữ liệu vào file CSV: ${CSV_OUTPUT}`);
+        console.log(`Đã lưu dữ liệu gốc vào file CSV: ${CSV_OUTPUT}`);
 
-        return heritages;
+        // Lưu dữ liệu đã lọc vào CSV
+        const filteredCsvWriter = createObjectCsvWriter({
+            path: FILTERED_CSV_OUTPUT,
+            header: [
+                { id: 'name', title: 'Tên di tích' },
+                { id: 'location', title: 'Địa điểm' },
+                { id: 'types', title: 'Loại di tích' },
+                { id: 'imageUrl', title: 'Đường dẫn hình ảnh' },
+                { id: 'description', title: 'Mô tả' }
+            ],
+            encoding: 'utf8'
+        });
+
+        await filteredCsvWriter.writeRecords(filteredHeritages);
+        console.log(`Đã lưu dữ liệu đã lọc vào file CSV: ${FILTERED_CSV_OUTPUT}`);
+
+        return { all: heritages, filtered: filteredHeritages };
 
     } catch (error) {
         console.error('Lỗi trong quá trình cào dữ liệu:', error);
@@ -472,8 +507,10 @@ async function crawlHeritages() {
 
 // Chạy crawler
 crawlHeritages()
-    .then(() => {
-        console.log('Hoàn tất quá trình cào dữ liệu!');
+    .then(result => {
+        console.log(`Hoàn tất quá trình cào dữ liệu!`);
+        console.log(`Tổng số di tích: ${result.all.length}`);
+        console.log(`Số di tích sau khi lọc: ${result.filtered.length}`);
     })
     .catch(error => {
         console.error('Lỗi khi chạy crawler:', error);
